@@ -3,7 +3,7 @@
 ## Recommended Project Setup
 ### Software needed
 ### MySQL command line or MySQL workbench
-### Github Desktop or Git
+### Github Desktop or Git Commandline
 ### PyCharm or any other python IDE
 Login to your Github account through Github Desktop or use git commandline, and clone this repository.
 You can edit the external editor to PyCharm through Github Desktop.
