@@ -74,7 +74,7 @@ CREATE TABLE BUDGET (
 );
 
 -- ============================================
--- FINANCIAL_TRANSACTION Entity, TRANSACTION is a reserved keyword
+-- MONETARY_TRANSACTION Entity, TRANSACTION is a reserved keyword
 -- ============================================
 CREATE TABLE MONETARY_TRANSACTION (
     transaction_id INT AUTO_INCREMENT PRIMARY KEY,
