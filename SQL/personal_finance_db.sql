@@ -394,5 +394,6 @@ ORDER BY spending.amount_over_budget DESC;
 -- VALUES
 -- (1, 1, 'monthly', '2026-12-01', '2026-12-31', -100.00);
 
+
 -- INSERT INTO APP_USER (name, email)
 -- VALUES (NULL, 'testnull@example.com');
