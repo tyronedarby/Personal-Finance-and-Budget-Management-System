@@ -261,10 +261,10 @@ BEGIN
 
 		IF maximum_budget_amount > 0 THEN
 			INSERT INTO MONETARY_TRANSACTION(user_id,category_id,amount,transaction_date,type,description)
-			VALUES (given_user_id,maximum_budget_category_id,LEAST(maximum_budget_amount, ABS(amount_overcharged)),given_transaction_date,'expense','automatic redistribution of budget funds caused by overdraft');
+			VALUES (given_user_id,maximum_budget_category_id,LEAST(maximum_budget_amount, ABS(amount_overcharged)),given_transaction_date,'Expense','automatic redistribution of budget funds caused by overdraft');
 
 			INSERT INTO MONETARY_TRANSACTION(user_id,category_id,amount,transaction_date,type,description)
-			VALUES(given_user_id,given_category_id,LEAST(maximum_budget_amount, ABS(amount_overcharged)),given_transaction_date,'income','automatic redistribution of budget funds caused by overdraft');
+			VALUES(given_user_id,given_category_id,LEAST(maximum_budget_amount, ABS(amount_overcharged)),given_transaction_date,'Income','automatic redistribution of budget funds caused by overdraft');
 
 			SET amount_overcharged = amount_overcharged + LEAST(maximum_budget_amount, ABS(amount_overcharged));
 		ELSE
@@ -332,10 +332,10 @@ BEGIN
 		
 		IF maximum_budget_amount > 0 THEN
 			INSERT INTO MONETARY_TRANSACTION(user_id,category_id,amount,transaction_date,type,description)
-			VALUES (given_user_id,maximum_budget_category_id,LEAST(maximum_budget_amount, ABS(amount_overcharged)),given_transaction_date,'expense','automatic redistribution of budget funds caused by overdraft');
+			VALUES (given_user_id,maximum_budget_category_id,LEAST(maximum_budget_amount, ABS(amount_overcharged)),given_transaction_date,'Expense','automatic redistribution of budget funds caused by overdraft');
 
 			INSERT INTO MONETARY_TRANSACTION(user_id,category_id,amount,transaction_date,type,description)
-			VALUES(given_user_id,given_category_id,LEAST(maximum_budget_amount, ABS(amount_overcharged)),given_transaction_date,'income','automatic redistribution of budget funds caused by overdraft');
+			VALUES(given_user_id,given_category_id,LEAST(maximum_budget_amount, ABS(amount_overcharged)),given_transaction_date,'Income','automatic redistribution of budget funds caused by overdraft');
 
 			SET amount_overcharged = amount_overcharged + LEAST(maximum_budget_amount, ABS(amount_overcharged));
 		ELSE
