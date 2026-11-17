@@ -330,16 +330,7 @@ def add_transaction():
 
             # Insert transaction into MySQL
             cursor.execute("""
-                INSERT INTO MONETARY_TRANSACTION
-                (
-                    user_id,
-                    category_id,
-                    amount,
-                    transaction_date,
-                    type,
-                    description
-                )
-                VALUES (%s, %s, %s, %s, %s, %s)
+                CALL log_transaction(%s, %s, %s, %s, %s, %s)
             """, (
                 user_id,
                 category_id,
@@ -516,10 +507,8 @@ def edit_transaction(transaction_id):
                 return "Description is too long.", 400
 
             cursor.execute("""
-                UPDATE MONETARY_TRANSACTION
-                SET amount = %s, description = %s
-                WHERE transaction_id = %s
-            """, (amount, description, transaction_id))
+                CALL update_transaction(%s, %s, %s)
+            """, (transaction_id, amount, description))
 
             if cursor.rowcount == 0:
                 connection.rollback()
