@@ -182,6 +182,171 @@ BEGIN
     LIMIT v_limit OFFSET v_offset;
 END$$
 
+-- returns how much money is left in a budget
+CREATE FUNCTION money_left_in_budget(given_budget_id INT) 
+RETURNS DECIMAL(12,2)
+BEGIN
+	DECLARE applicable_budget_user_id INT;
+	DECLARE applicable_budget_category_id INT;
+	DECLARE applicable_budget_amount DECIMAL(12,2);
+	DECLARE applicable_budget_start_date DATE;
+	DECLARE applicable_budget_end_date DATE;
+	DECLARE total_expenses DECIMAL(12,2);
+	DECLARE total_income DECIMAL(12,2);
+
+	SELECT limit_amount,user_id,category_id,start_date,end_date 
+	INTO applicable_budget_amount,applicable_budget_user_id,applicable_budget_category_id,applicable_budget_start_date,applicable_budget_end_date
+	FROM BUDGET AS b WHERE (b.budget_id = given_budget_id);
+
+	SELECT COALESCE(SUM(amount),0) FROM MONETARY_TRANSACTION AS t WHERE (t.user_id = applicable_budget_user_id) 
+	AND (t.category_id = applicable_budget_category_id) 
+	AND (t.type = 'Expense')
+	AND t.transaction_date BETWEEN applicable_budget_start_date AND applicable_budget_end_date INTO total_expenses;
+
+	SELECT COALESCE(SUM(amount),0) FROM MONETARY_TRANSACTION AS t WHERE (t.user_id = applicable_budget_user_id) 
+	AND (t.category_id = applicable_budget_category_id) 
+	AND (t.type = 'Income')
+	AND t.transaction_date BETWEEN applicable_budget_start_date AND applicable_budget_end_date INTO total_income;
+
+	RETURN applicable_budget_amount + total_income - total_expenses;
+END $$
+
+-- used to insert transactions, will redistribute overdrafted funds to other budgets that are still positive
+CREATE PROCEDURE log_transaction(
+	IN given_user_id INT, 
+	IN given_category_id INT,
+	IN given_amount DECIMAL(12,2), 
+	IN given_transaction_date DATE, 
+	IN given_type VARCHAR(100), 
+	IN given_description VARCHAR(1000)
+)
+BEGIN
+	DECLARE applicable_budget_id INT;
+	DECLARE maximum_budget_id INT;
+	DECLARE maximum_budget_amount DECIMAL(12,2);
+	DECLARE amount_overcharged DECIMAL(12,2);
+	DECLARE maximum_budget_category_id INT;
+
+	DECLARE EXIT HANDLER FOR SQLEXCEPTION
+	BEGIN
+    	ROLLBACK;
+		RESIGNAL;
+	END;
+
+	START TRANSACTION;
+
+	INSERT INTO MONETARY_TRANSACTION (user_id, category_id, amount, transaction_date, type, description) 
+	VALUES (given_user_id, given_category_id, given_amount, given_transaction_date, given_type, given_description);
+
+	IF EXISTS(SELECT budget_id FROM BUDGET AS b 
+	WHERE (b.category_id = given_category_id) 
+	AND (b.user_id = given_user_id) 
+	AND given_transaction_date BETWEEN b.start_date AND b.end_date)
+	THEN
+		SELECT budget_id INTO applicable_budget_id 
+		FROM BUDGET AS b WHERE (b.category_id = given_category_id) 
+		AND (b.user_id = given_user_id) AND given_transaction_date BETWEEN b.start_date 
+		AND b.end_date;
+
+		SET amount_overcharged = money_left_in_budget(applicable_budget_id);
+	ELSE  
+		-- no relevant budget found
+		SET amount_overcharged = 0;
+	END IF;
+
+	-- amount overcharged will only be negative if the budget was actually overcharged
+	WHILE amount_overcharged < 0 DO
+		SELECT budget_id,category_id INTO maximum_budget_id,maximum_budget_category_id FROM BUDGET AS b WHERE (b.user_id = given_user_id) ORDER BY money_left_in_budget(budget_id) DESC LIMIT 1;
+		SET maximum_budget_amount = money_left_in_budget(maximum_budget_id);
+
+		IF maximum_budget_amount > 0 THEN
+			INSERT INTO MONETARY_TRANSACTION(user_id,category_id,amount,transaction_date,type,description)
+			VALUES (given_user_id,maximum_budget_category_id,LEAST(maximum_budget_amount, ABS(amount_overcharged)),given_transaction_date,'expense','automatic redistribution of budget funds caused by overdraft');
+
+			INSERT INTO MONETARY_TRANSACTION(user_id,category_id,amount,transaction_date,type,description)
+			VALUES(given_user_id,given_category_id,LEAST(maximum_budget_amount, ABS(amount_overcharged)),given_transaction_date,'income','automatic redistribution of budget funds caused by overdraft');
+
+			SET amount_overcharged = amount_overcharged + LEAST(maximum_budget_amount, ABS(amount_overcharged));
+		ELSE
+			-- there are no more budgets to redistribute to
+			SET amount_overcharged = 0;
+		END IF;
+	END WHILE;
+
+	COMMIT;
+
+END $$
+
+-- used to update transactions, will redistribute overdrafted funds to other budgets that are still positive
+CREATE PROCEDURE update_transaction(
+	IN given_transaction_id INT, 
+	IN given_amount DECIMAL(12,2),
+	IN given_description VARCHAR(1000)
+)
+BEGIN
+	DECLARE applicable_budget_id INT;
+	DECLARE maximum_budget_id INT;
+	DECLARE maximum_budget_amount DECIMAL(12,2);
+	DECLARE amount_overcharged DECIMAL(12,2);
+	DECLARE maximum_budget_category_id INT;
+	DECLARE given_user_id INT;
+	DECLARE given_transaction_date DATE;
+	DECLARE given_category_id INT;
+
+	DECLARE EXIT HANDLER FOR SQLEXCEPTION
+	BEGIN
+    	ROLLBACK;
+		RESIGNAL;
+	END;
+
+	START TRANSACTION;
+
+	UPDATE MONETARY_TRANSACTION 
+	SET amount = given_amount, description = given_description 
+	WHERE transaction_id = given_transaction_id;
+
+	IF EXISTS(SELECT budget_id FROM BUDGET AS b 
+	JOIN MONETARY_TRANSACTION AS t ON (b.category_id = t.category_id) 
+	AND (b.user_id = t.user_id) 
+	AND t.transaction_date BETWEEN b.start_date AND b.end_date 
+	WHERE (t.transaction_id = given_transaction_id))
+	THEN
+		SELECT budget_id INTO applicable_budget_id 
+		FROM BUDGET AS b JOIN MONETARY_TRANSACTION AS t ON (b.category_id = t.category_id) 
+		AND (b.user_id = t.user_id) AND t.transaction_date BETWEEN b.start_date AND b.end_date 
+		WHERE (t.transaction_id = given_transaction_id);
+
+		SET amount_overcharged = money_left_in_budget(applicable_budget_id);
+
+		SELECT user_id,category_id,transaction_date INTO given_user_id,given_category_id,given_transaction_date
+		FROM MONETARY_TRANSACTION AS t WHERE (t.transaction_id = given_transaction_id);
+	ELSE  
+		-- no relevant budget found
+		SET amount_overcharged = 0;
+	END IF;
+
+	-- amount overcharged will only be negative if the budget was actually overcharged
+	WHILE amount_overcharged < 0 DO		
+		SELECT budget_id,category_id INTO maximum_budget_id,maximum_budget_category_id FROM BUDGET AS b WHERE (b.user_id = given_user_id) ORDER BY money_left_in_budget(budget_id) DESC LIMIT 1;
+		SET maximum_budget_amount = money_left_in_budget(maximum_budget_id);
+		
+		IF maximum_budget_amount > 0 THEN
+			INSERT INTO MONETARY_TRANSACTION(user_id,category_id,amount,transaction_date,type,description)
+			VALUES (given_user_id,maximum_budget_category_id,LEAST(maximum_budget_amount, ABS(amount_overcharged)),given_transaction_date,'expense','automatic redistribution of budget funds caused by overdraft');
+
+			INSERT INTO MONETARY_TRANSACTION(user_id,category_id,amount,transaction_date,type,description)
+			VALUES(given_user_id,given_category_id,LEAST(maximum_budget_amount, ABS(amount_overcharged)),given_transaction_date,'income','automatic redistribution of budget funds caused by overdraft');
+
+			SET amount_overcharged = amount_overcharged + LEAST(maximum_budget_amount, ABS(amount_overcharged));
+		ELSE
+			-- there are no more budgets to redistribute to
+			SET amount_overcharged = 0;
+		END IF;
+	END WHILE;
+
+	COMMIT;
+END $$
+
 DELIMITER ;
 
 SHOW TABLES;
@@ -217,21 +382,19 @@ VALUES
 (3, 2, 'monthly', '2026-11-01', '2026-11-30', 300.00),
 (3, 6, 'monthly', '2026-11-01', '2026-11-30', 200.00);
 
-INSERT INTO MONETARY_TRANSACTION
-(user_id, category_id, amount, transaction_date, type, description)
-VALUES
-(1, 1, 120.00, '2026-11-02', 'Expense', 'Weekly groceries'),
-(1, 1, 95.00, '2026-11-09', 'Expense', 'Food shopping'),
-(1, 2, 250.00, '2026-11-05', 'Expense', 'Video games'),
-(1, 3, 950.00, '2026-11-01', 'Expense', 'Monthly rent'),
-(1, 4, 175.00, '2026-11-07', 'Expense', 'Electricity and water'),
-(1, 7, 2500.00, '2026-11-01', 'Income', 'Paycheck'),
-(2, 1, 150.00, '2026-11-03', 'Expense', 'Groceries'),
-(2, 5, 275.00, '2026-11-06', 'Expense', 'Transportation'),
-(2, 7, 3000.00, '2026-11-01', 'Income', 'Salary'),
-(3, 2, 180.00, '2026-11-04', 'Expense', 'Entertainment'),
-(3, 6, 225.00, '2026-11-08', 'Expense', 'Shopping'),
-(3, 8, 1200.00, '2026-11-02', 'Income', 'Freelance work');
+-- for budget redistribution to work, all transaction inserts must be done through log_transaction
+CALL log_transaction(1, 1, 120.00, '2026-11-02', 'Expense', 'Weekly groceries');
+CALL log_transaction(1, 1, 95.00, '2026-11-09', 'Expense', 'Food shopping');
+CALL log_transaction(1, 2, 250.00, '2026-11-05', 'Expense', 'Video games');
+CALL log_transaction(1, 3, 950.00, '2026-11-01', 'Expense', 'Monthly rent');
+CALL log_transaction(1, 4, 175.00, '2026-11-07', 'Expense', 'Electricity and water');
+CALL log_transaction(1, 7, 2500.00, '2026-11-01', 'Income', 'Paycheck');
+CALL log_transaction(2, 1, 150.00, '2026-11-03', 'Expense', 'Groceries');
+CALL log_transaction(2, 5, 275.00, '2026-11-06', 'Expense', 'Transportation');
+CALL log_transaction(2, 7, 3000.00, '2026-11-01', 'Income', 'Salary');
+CALL log_transaction(3, 2, 180.00, '2026-11-04', 'Expense', 'Entertainment');
+CALL log_transaction(3, 6, 225.00, '2026-11-08', 'Expense', 'Shopping');
+CALL log_transaction(3, 8, 1200.00, '2026-11-02', 'Income', 'Freelance work');
 
 INSERT INTO SAVINGS_GOAL
 (user_id, goal_name, target_amount, current_amount, target_date)
